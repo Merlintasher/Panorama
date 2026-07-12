@@ -164,10 +164,47 @@ function triggerIris(event) {
 
 // ---------------------------------------------------------------- events
 
-els.closeBtn.addEventListener("click", closePanorama);
-els.prevBtn.addEventListener("click", () => step(-1));
-els.nextBtn.addEventListener("click", () => step(1));
-els.resetView.addEventListener("click", () => map.fitToBounds(poses));
+// На тач-пристроях клік по кнопці, що лежить поверх зони обертання
+// панорами/карти, спрацьовує на елементі під пальцем в момент відпускання —
+// навіть якщо жест почався далеко від кнопки (людина просто крутила огляд,
+// а палець в кінці руху опинився над стрілкою). Тому відстежуємо зміщення
+// пальця глобально, від pointerdown до pointerup, і якщо воно перевищує
+// поріг — вважаємо це рухом/перетягуванням, а не тапом, і ігноруємо клік.
+const DRAG_CLICK_THRESHOLD_PX = 12;
+let _dragStartPos = null;
+let _wasDragGesture = false;
+
+window.addEventListener("pointerdown", (e) => {
+  _dragStartPos = { x: e.clientX, y: e.clientY };
+  _wasDragGesture = false;
+}, { capture: true });
+
+window.addEventListener("pointermove", (e) => {
+  if (!_dragStartPos) return;
+  const dx = e.clientX - _dragStartPos.x;
+  const dy = e.clientY - _dragStartPos.y;
+  if (Math.hypot(dx, dy) > DRAG_CLICK_THRESHOLD_PX) _wasDragGesture = true;
+}, { capture: true });
+
+window.addEventListener("pointerup", () => {
+  _dragStartPos = null;
+}, { capture: true });
+
+function guardTapClick(handler) {
+  return (e) => {
+    if (_wasDragGesture) {
+      e.preventDefault();
+      e.stopPropagation();
+      return;
+    }
+    handler(e);
+  };
+}
+
+els.closeBtn.addEventListener("click", guardTapClick(closePanorama));
+els.prevBtn.addEventListener("click", guardTapClick(() => step(-1)));
+els.nextBtn.addEventListener("click", guardTapClick(() => step(1)));
+els.resetView.addEventListener("click", guardTapClick(() => map.fitToBounds(poses)));
 
 window.addEventListener("keydown", (e) => {
   if (!els.panoramaOverlay.classList.contains("visible")) return;
