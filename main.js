@@ -164,47 +164,65 @@ function triggerIris(event) {
 
 // ---------------------------------------------------------------- events
 
-// На тач-пристроях клік по кнопці, що лежить поверх зони обертання
-// панорами/карти, спрацьовує на елементі під пальцем в момент відпускання —
-// навіть якщо жест почався далеко від кнопки (людина просто крутила огляд,
-// а палець в кінці руху опинився над стрілкою). Тому відстежуємо зміщення
-// пальця глобально, від pointerdown до pointerup, і якщо воно перевищує
-// поріг — вважаємо це рухом/перетягуванням, а не тапом, і ігноруємо клік.
-const DRAG_CLICK_THRESHOLD_PX = 12;
-let _dragStartPos = null;
-let _wasDragGesture = false;
+// Кнопки (стрілки навігації, закрити, скинути вигляд) лежать поверх зони,
+// де користувач обертає панораму/тягає карту пальцем. Нативний браузерний
+// "click" на тач-пристроях спрацьовує на елементі, над яким палець
+// опинився В МОМЕНТ ВІДПУСКАННЯ — навіть якщо жест почався деінде
+// (людина просто крутила огляд, а не цілилась у кнопку). Через це
+// звичайний addEventListener("click", ...) ненадійний тут.
+//
+// Рішення: обробляємо натискання самі через pointerdown/pointerup і
+// вважаємо це тапом по кнопці, лише якщо ОБИДВІ події — і початок,
+// і кінець жесту — відбулись на цій самій кнопці, і зміщення пальця між
+// ними мале. Нативний "click" при цьому повністю блокуємо, щоб він не міг
+// випадково викликати дію ще раз чи спрацювати сам по собі після дрегу,
+// що почався поза кнопкою.
+const TAP_MOVE_THRESHOLD_PX = 10;
 
-window.addEventListener("pointerdown", (e) => {
-  _dragStartPos = { x: e.clientX, y: e.clientY };
-  _wasDragGesture = false;
-}, { capture: true });
+function bindTapButton(el, handler) {
+  let startPos = null;
+  let startedOnButton = false;
 
-window.addEventListener("pointermove", (e) => {
-  if (!_dragStartPos) return;
-  const dx = e.clientX - _dragStartPos.x;
-  const dy = e.clientY - _dragStartPos.y;
-  if (Math.hypot(dx, dy) > DRAG_CLICK_THRESHOLD_PX) _wasDragGesture = true;
-}, { capture: true });
+  el.addEventListener("pointerdown", (e) => {
+    startedOnButton = true;
+    startPos = { x: e.clientX, y: e.clientY };
+  });
 
-window.addEventListener("pointerup", () => {
-  _dragStartPos = null;
-}, { capture: true });
-
-function guardTapClick(handler) {
-  return (e) => {
-    if (_wasDragGesture) {
-      e.preventDefault();
-      e.stopPropagation();
-      return;
+  el.addEventListener("pointermove", (e) => {
+    if (!startedOnButton || !startPos) return;
+    const dx = e.clientX - startPos.x;
+    const dy = e.clientY - startPos.y;
+    if (Math.hypot(dx, dy) > TAP_MOVE_THRESHOLD_PX) {
+      // палець з'їхав з кнопки надто далеко — це вже не тап, а жест
+      startedOnButton = false;
     }
-    handler(e);
-  };
+  });
+
+  el.addEventListener("pointerup", (e) => {
+    if (startedOnButton) {
+      handler(e);
+    }
+    startedOnButton = false;
+    startPos = null;
+  });
+
+  el.addEventListener("pointercancel", () => {
+    startedOnButton = false;
+    startPos = null;
+  });
+
+  // Нативний click повністю ігноруємо — навігацію викликає лише
+  // pointerup вище, коли жест дійсно почався на кнопці.
+  el.addEventListener("click", (e) => {
+    e.preventDefault();
+    e.stopPropagation();
+  });
 }
 
-els.closeBtn.addEventListener("click", guardTapClick(closePanorama));
-els.prevBtn.addEventListener("click", guardTapClick(() => step(-1)));
-els.nextBtn.addEventListener("click", guardTapClick(() => step(1)));
-els.resetView.addEventListener("click", guardTapClick(() => map.fitToBounds(poses)));
+bindTapButton(els.closeBtn, closePanorama);
+bindTapButton(els.prevBtn, () => step(-1));
+bindTapButton(els.nextBtn, () => step(1));
+bindTapButton(els.resetView, () => map.fitToBounds(poses));
 
 window.addEventListener("keydown", (e) => {
   if (!els.panoramaOverlay.classList.contains("visible")) return;
