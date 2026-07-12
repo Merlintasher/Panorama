@@ -213,15 +213,4 @@ window.addEventListener("keydown", (e) => {
   if (e.key === "Escape") closePanorama();
 });
 
-let touchStartX = null;
-els.panoramaContainer.addEventListener("touchstart", (e) => {
-  if (e.touches.length === 1) touchStartX = e.touches[0].clientX;
-}, { passive: true });
-els.panoramaContainer.addEventListener("touchend", (e) => {
-  if (touchStartX === null) return;
-  const dx = e.changedTouches[0].clientX - touchStartX;
-  touchStartX = null;
-  if (Math.abs(dx) > 140) step(dx > 0 ? -1 : 1);
-}, { passive: true });
-
 init();
