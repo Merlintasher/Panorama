@@ -1,5 +1,5 @@
 import { MapView } from "./mapview.js";
-import { loadTrajectory, computeInitialView, computeNavArrowAim } from "./trajectory.js";
+import { loadTrajectory, computeInitialView } from "./trajectory.js";
 import { PanoramaController } from "./panorama.js";
 
 // ---------------------------------------------------------------- CONFIG
@@ -16,25 +16,10 @@ const CONFIG = {
     // Якщо панорама відкривається не туди — пробуйте [0,1,0], [0,0,1] і т.д.
     forwardAxis: [1, 0, 0],
     // Поправка (у градусах) між світовим азимутом і yaw=0 текстури
-    // панорами. Впливає на те, куди показують стрілки "вперед/назад" і на
-    // конус напрямку погляду на мінікарті. Якщо стрілки вказують не в той
-    // бік маршруту — покрутіть це значення (спробуйте 90, 180, 270, або
-    // від'ємні), той самий принцип підбору, що й для forwardAxis.
+    // панорами. Впливає на конус напрямку погляду на мінікарті. Якщо конус
+    // показує не в той бік — покрутіть це значення (спробуйте 90, 180, 270,
+    // або від'ємні), той самий принцип підбору, що й для forwardAxis.
     worldYawOffsetDeg: 0,
-  },
-  navArrows: {
-    // Висота ока над землею (метри) — визначає, наскільки різко стрілка
-    // "падає" вниз для близьких сусідніх точок. Зменшіть, якщо стрілки
-    // виглядають задерто вгору; збільшіть, якщо задерто в підлогу.
-    eyeHeight: 1.6,
-    minPitch: -0.55,
-    maxPitch: -0.05,
-    // Розмір стрілки трохи змінюється залежно від відстані до сусідньої
-    // точки (ближче — більша), в межах цього діапазону.
-    minScale: 0.75,
-    maxScale: 1.25,
-    // Відстань (метри), на якій розмір стрілки вважається "базовим" (1.0).
-    referenceDistance: 3,
   },
   miniMap: {
     // Скільки метрів по горизонталі показувати в мінікарті навколо
@@ -125,50 +110,6 @@ function formatCaption(pose) {
   return `${dateStr}  ·  ${pose.index + 1} / ${poses.length}`;
 }
 
-function distanceToScale(distance) {
-  const { minScale, maxScale, referenceDistance } = CONFIG.navArrows;
-  // Ближче за референсну відстань -> більша стрілка; далі -> менша.
-  const ratio = referenceDistance / Math.max(distance, 0.3);
-  return Math.min(maxScale, Math.max(minScale, ratio));
-}
-
-function buildNavMarkers(index) {
-  const pose = poses[index];
-  const offsetRad = (CONFIG.orientation.worldYawOffsetDeg * Math.PI) / 180;
-  const { eyeHeight, minPitch, maxPitch } = CONFIG.navArrows;
-  const markers = [];
-
-  const next = poses[index + 1];
-  if (next) {
-    const { yaw, pitch, distance } = computeNavArrowAim(pose, next, {
-      offsetRad, eyeHeight, minPitch, maxPitch,
-    });
-    markers.push({
-      id: "nav-next",
-      direction: "next",
-      yaw, pitch,
-      scale: distanceToScale(distance),
-      tooltip: "Вперед",
-    });
-  }
-
-  const prev = poses[index - 1];
-  if (prev) {
-    const { yaw, pitch, distance } = computeNavArrowAim(pose, prev, {
-      offsetRad, eyeHeight, minPitch, maxPitch,
-    });
-    markers.push({
-      id: "nav-prev",
-      direction: "prev",
-      yaw, pitch,
-      scale: distanceToScale(distance),
-      tooltip: "Назад",
-    });
-  }
-
-  return markers;
-}
-
 async function openPanoramaAt(index, event) {
   const pose = poses[index];
   if (!pose) return;
@@ -187,9 +128,6 @@ async function openPanoramaAt(index, event) {
 
   try {
     await panorama.open(panoramaUrlFor(pose), { yaw, pitch, caption });
-    panorama.setNavMarkers(buildNavMarkers(index), (direction) => {
-      step(direction === "next" ? 1 : -1);
-    });
   } catch (err) {
     console.error(err);
     els.panoCaption.textContent = "Не вдалося завантажити зображення панорами";
