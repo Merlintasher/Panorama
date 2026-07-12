@@ -30,10 +30,12 @@ export class MapView {
     this.activeIndex = -1;
     this.hoverIndex = -1;
 
+    this._activePointers = new Map(); // pointerId -> { x, y } (screen coords)
     this._downPointer = null;
     this._dragging = false;
     this._dragStartView = null;
-    this._pinchStartDist = null;
+    this._pinchLastDist = null;
+    this._pinchLastMid = null;
 
     this.width = 0;
     this.height = 0;
@@ -51,13 +53,36 @@ export class MapView {
     const c = this.canvas;
 
     c.addEventListener("pointerdown", (e) => {
-      this._downPointer = { x: e.clientX, y: e.clientY };
-      this._dragStartView = { ...this.view };
-      this._dragging = false;
-      c.setPointerCapture(e.pointerId);
+      this._activePointers.set(e.pointerId, { x: e.clientX, y: e.clientY });
+      try { c.setPointerCapture(e.pointerId); } catch {}
+
+      if (this._activePointers.size === 2) {
+        // почався pinch — скасовуємо одно-пальцевий drag/клік
+        this._downPointer = null;
+        this._dragging = false;
+        this._startPinch();
+        return;
+      }
+
+      if (this._activePointers.size === 1) {
+        this._downPointer = { x: e.clientX, y: e.clientY };
+        this._dragStartView = { ...this.view };
+        this._dragging = false;
+      }
     });
 
     c.addEventListener("pointermove", (e) => {
+      if (!this._activePointers.has(e.pointerId)) {
+        this._updateHover(e);
+        return;
+      }
+      this._activePointers.set(e.pointerId, { x: e.clientX, y: e.clientY });
+
+      if (this._activePointers.size >= 2) {
+        this._handlePinchMove();
+        return;
+      }
+
       if (this._downPointer) {
         const dx = e.clientX - this._downPointer.x;
         const dy = e.clientY - this._downPointer.y;
@@ -67,25 +92,98 @@ export class MapView {
           this.view.cy = this._dragStartView.cy + dy / this.view.scale;
           this._render();
         }
-        return;
       }
-      this._updateHover(e);
     });
 
-    c.addEventListener("pointerup", (e) => {
+    const endPointer = (e) => {
+      const wasTracked = this._activePointers.has(e.pointerId);
+      this._activePointers.delete(e.pointerId);
+      try { c.releasePointerCapture(e.pointerId); } catch {}
+      if (!wasTracked) return;
+
+      if (this._activePointers.size >= 2) {
+        // все ще pinch (був третій палець) — перестартувати відлік
+        this._startPinch();
+        return;
+      }
+
+      if (this._activePointers.size === 1) {
+        // з двох пальців лишився один — продовжуємо як звичайний drag,
+        // без стрибка, і не рахуємо це кліком
+        this._pinchLastDist = null;
+        const [remaining] = this._activePointers.values();
+        this._downPointer = { x: remaining.x, y: remaining.y };
+        this._dragStartView = { ...this.view };
+        this._dragging = true;
+        return;
+      }
+
+      // останній палець прибрано
+      this._pinchLastDist = null;
       const wasDragging = this._dragging;
       const start = this._downPointer;
       this._dragging = false;
       this._downPointer = null;
-      try { c.releasePointerCapture(e.pointerId); } catch {}
       if (wasDragging || !start) return;
       const dx = e.clientX - start.x;
       const dy = e.clientY - start.y;
       if (Math.hypot(dx, dy) > 6) return;
       this._handleClick(e);
-    });
+    };
+
+    c.addEventListener("pointerup", endPointer);
+    c.addEventListener("pointercancel", endPointer);
 
     c.addEventListener("wheel", (e) => this._handleWheel(e), { passive: false });
+  }
+
+  _pointerMidScreen() {
+    const [p1, p2] = this._activePointers.values();
+    const rect = this.canvas.getBoundingClientRect();
+    return {
+      x: (p1.x + p2.x) / 2 - rect.left,
+      y: (p1.y + p2.y) / 2 - rect.top,
+    };
+  }
+
+  _pointerDist() {
+    const [p1, p2] = this._activePointers.values();
+    return Math.hypot(p1.x - p2.x, p1.y - p2.y);
+  }
+
+  _startPinch() {
+    this._pinchLastDist = this._pointerDist();
+    this._pinchLastMid = this._pointerMidScreen();
+  }
+
+  _handlePinchMove() {
+    const dist = this._pointerDist();
+    const mid = this._pointerMidScreen();
+
+    if (this._pinchLastDist == null || this._pinchLastMid == null) {
+      this._pinchLastDist = dist;
+      this._pinchLastMid = mid;
+      return;
+    }
+
+    // 1) панорамування — рух середньої точки між двома пальцями
+    const dx = mid.x - this._pinchLastMid.x;
+    const dy = mid.y - this._pinchLastMid.y;
+    this.view.cx -= dx / this.view.scale;
+    this.view.cy += dy / this.view.scale;
+
+    // 2) масштабування — прив'язане до поточної середньої точки між
+    // пальцями, щоб карта не "стрибала" під час зведення/розведення
+    const before = this.screenToWorld(mid.x, mid.y);
+    const factor = dist / this._pinchLastDist;
+    this.view.scale = clamp(this.view.scale * factor, this._fitScale * 0.15, this._fitScale * 60);
+    const after = this.screenToWorld(mid.x, mid.y);
+    this.view.cx += before.x - after.x;
+    this.view.cy += before.y - after.y;
+
+    this._pinchLastDist = dist;
+    this._pinchLastMid = mid;
+    this._render();
   }
 
   _resize() {
