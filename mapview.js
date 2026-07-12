@@ -34,8 +34,9 @@ export class MapView {
     this._downPointer = null;
     this._dragging = false;
     this._dragStartView = null;
-    this._pinchLastDist = null;
-    this._pinchLastMid = null;
+    this._pinchStartDist = null;
+    this._pinchStartView = null;
+    this._pinchWorldAnchor = null;
 
     this.width = 0;
     this.height = 0;
@@ -110,7 +111,7 @@ export class MapView {
       if (this._activePointers.size === 1) {
         // з двох пальців лишився один — продовжуємо як звичайний drag,
         // без стрибка, і не рахуємо це кліком
-        this._pinchLastDist = null;
+        this._pinchStartDist = null;
         const [remaining] = this._activePointers.values();
         this._downPointer = { x: remaining.x, y: remaining.y };
         this._dragStartView = { ...this.view };
@@ -119,7 +120,7 @@ export class MapView {
       }
 
       // останній палець прибрано
-      this._pinchLastDist = null;
+      this._pinchStartDist = null;
       const wasDragging = this._dragging;
       const start = this._downPointer;
       this._dragging = false;
@@ -152,37 +153,37 @@ export class MapView {
   }
 
   _startPinch() {
-    this._pinchLastDist = this._pointerDist();
-    this._pinchLastMid = this._pointerMidScreen();
+    this._pinchStartDist = this._pointerDist();
+    const mid = this._pointerMidScreen();
+    this._pinchStartView = { ...this.view };
+    // світова точка, яка була рівно між пальцями на момент початку pinch —
+    // саме вона має лишатись під пальцями протягом усього жесту
+    this._pinchWorldAnchor = this.screenToWorld(mid.x, mid.y);
   }
 
   _handlePinchMove() {
-    const dist = this._pointerDist();
-    const mid = this._pointerMidScreen();
-
-    if (this._pinchLastDist == null || this._pinchLastMid == null) {
-      this._pinchLastDist = dist;
-      this._pinchLastMid = mid;
+    if (this._pinchStartDist == null || !this._pinchWorldAnchor) {
+      this._startPinch();
       return;
     }
 
-    // 1) панорамування — рух середньої точки між двома пальцями
-    const dx = mid.x - this._pinchLastMid.x;
-    const dy = mid.y - this._pinchLastMid.y;
-    this.view.cx -= dx / this.view.scale;
-    this.view.cy += dy / this.view.scale;
+    const dist = this._pointerDist();
+    const mid = this._pointerMidScreen();
 
-    // 2) масштабування — прив'язане до поточної середньої точки між
-    // пальцями, щоб карта не "стрибала" під час зведення/розведення
-    const before = this.screenToWorld(mid.x, mid.y);
-    const factor = dist / this._pinchLastDist;
-    this.view.scale = clamp(this.view.scale * factor, this._fitScale * 0.15, this._fitScale * 60);
-    const after = this.screenToWorld(mid.x, mid.y);
-    this.view.cx += before.x - after.x;
-    this.view.cy += before.y - after.y;
+    const factor = dist / this._pinchStartDist;
+    const newScale = clamp(
+      this._pinchStartView.scale * factor,
+      this._fitScale * 0.15,
+      this._fitScale * 60
+    );
 
-    this._pinchLastDist = dist;
-    this._pinchLastMid = mid;
+    // Розрахунок "з нуля" від зафіксованого при старті жесту якоря — а не
+    // накопичення дельт по кадрах — щоб пропущений/здвоєний pointermove
+    // (типово на мобільних) не викликав ривків чи дрейфу карти.
+    this.view.scale = newScale;
+    this.view.cx = this._pinchWorldAnchor.x - (mid.x - this.width / 2) / newScale;
+    this.view.cy = this._pinchWorldAnchor.y + (mid.y - this.height / 2) / newScale;
+
     this._render();
   }
 
