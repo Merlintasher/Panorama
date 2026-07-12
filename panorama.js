@@ -9,7 +9,11 @@ import { MarkersPlugin } from "@photo-sphere-viewer/markers-plugin";
  *   в'юєра — рух вперед/назад по маршруту виглядає плавно).
  * - вміє малювати клікабельні стрілки "вперед/назад" прямо в панорамі
  *   (як у Google Street View) через MarkersPlugin.
+ * - ігнорує клік по стрілці, якщо в цей момент користувач крутив панораму
+ *   (drag threshold), щоб уникнути випадкових переходів.
  */
+
+const DRAG_THRESHOLD_PX = 10;
 
 function navMarkerHtml(direction, scale = 1) {
   const rotated = direction === "prev" ? 'transform="rotate(180 12 12)"' : "";
@@ -31,6 +35,42 @@ export class PanoramaController {
     this.viewer = null;
     this.markersPlugin = null;
     this._onNavSelect = null;
+
+    // drag-detection state
+    this.isDragging = false;
+    this._dragStart = null;
+    this._dragPointerId = null;
+
+    // сохраняем ссылки на обработчики, чтобы можно было снять их в destroy()
+    this._onPointerDown = this._handlePointerDown.bind(this);
+    this._onPointerMove = this._handlePointerMove.bind(this);
+    this._onPointerUp = this._handlePointerUp.bind(this);
+  }
+
+  _handlePointerDown(e) {
+    // сбрасываем именно здесь, а не по таймеру после pointerup —
+    // так select-marker (даже если придёт с задержкой) увидит
+    // актуальное значение isDragging на момент клика/драга
+    this.isDragging = false;
+    this._dragPointerId = e.pointerId;
+    this._dragStart = { x: e.clientX, y: e.clientY };
+  }
+
+  _handlePointerMove(e) {
+    if (!this._dragStart || e.pointerId !== this._dragPointerId) return;
+
+    const dx = e.clientX - this._dragStart.x;
+    const dy = e.clientY - this._dragStart.y;
+
+    if (Math.sqrt(dx * dx + dy * dy) > DRAG_THRESHOLD_PX) {
+      this.isDragging = true;
+    }
+  }
+
+  _handlePointerUp(e) {
+    if (e && e.pointerId !== this._dragPointerId) return;
+    this._dragStart = null;
+    this._dragPointerId = null;
   }
 
   async open(url, { yaw = 0, pitch = 0, caption = "" } = {}) {
@@ -55,10 +95,19 @@ export class PanoramaController {
       });
 
       this.markersPlugin.addEventListener("select-marker", ({ marker }) => {
+        // якщо користувач крутив панораму — ігноруємо клік по стрілці
+        if (this.isDragging) return;
+
         if (this._onNavSelect && marker?.data?.direction) {
           this._onNavSelect(marker.data.direction);
         }
       });
+
+      this.container.addEventListener("pointerdown", this._onPointerDown);
+      this.container.addEventListener("pointermove", this._onPointerMove);
+      this.container.addEventListener("pointerup", this._onPointerUp);
+      this.container.addEventListener("pointercancel", this._onPointerUp);
+      this.container.addEventListener("pointerleave", this._onPointerUp);
 
       await new Promise((resolve) => {
         this.viewer.addEventListener("ready", () => resolve(), { once: true });
@@ -96,9 +145,19 @@ export class PanoramaController {
 
   destroy() {
     if (this.viewer) {
+      this.container.removeEventListener("pointerdown", this._onPointerDown);
+      this.container.removeEventListener("pointermove", this._onPointerMove);
+      this.container.removeEventListener("pointerup", this._onPointerUp);
+      this.container.removeEventListener("pointercancel", this._onPointerUp);
+      this.container.removeEventListener("pointerleave", this._onPointerUp);
+
       this.viewer.destroy();
       this.viewer = null;
       this.markersPlugin = null;
     }
+
+    this.isDragging = false;
+    this._dragStart = null;
+    this._dragPointerId = null;
   }
 }
